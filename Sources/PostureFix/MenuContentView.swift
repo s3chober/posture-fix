@@ -36,7 +36,7 @@ struct MenuContentView: View {
             Circle()
                 .fill(statusColor)
                 .frame(width: 10, height: 10)
-            Text("PostureFix")
+            Text("Posture Focus")
                 .font(.headline)
             Spacer()
             Text(state.connectionText)
@@ -59,7 +59,12 @@ struct MenuContentView: View {
                 HStack {
                     Text(String(format: "Head drop: %.0f°", max(0, state.deviation)))
                     Spacer()
-                    Text(String(format: "Pitch: %.0f°", state.livePitch))
+                    if let remaining = state.focusTimeString {
+                        Text("Focus \(remaining)")
+                            .monospacedDigit()
+                    } else {
+                        Text(String(format: "Pitch: %.0f°", state.livePitch))
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -78,7 +83,10 @@ struct MenuContentView: View {
             HStack(spacing: 0) {
                 statTile("Good posture", String(format: "%.0f%%", state.goodPosturePercent))
                 statTile("Slouches", "\(state.slouchEvents)")
-                statTile("Session", state.monitoredTimeString)
+                statTile(
+                    state.focusTimeString == nil ? "Session" : "Remaining",
+                    state.focusTimeString ?? state.monitoredTimeString
+                )
             }
 
             Chart {
@@ -145,10 +153,24 @@ struct MenuContentView: View {
                 }
                 .disabled(!state.motion.hasData)
             } else {
+                HStack {
+                    Text("Session")
+                    Spacer()
+                    Picker("", selection: $state.focusDurationMinutes) {
+                        Text("External / untimed").tag(0)
+                        Text("25 minutes").tag(25)
+                        Text("50 minutes").tag(50)
+                        Text("90 minutes").tag(90)
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
+                }
+                .font(.callout)
+
                 Button {
                     state.startMonitoring()
                 } label: {
-                    Label("Start monitoring", systemImage: "play.circle.fill")
+                    Label(state.startButtonTitle, systemImage: "play.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .keyboardShortcut(.defaultAction)
@@ -252,12 +274,27 @@ struct MenuContentView: View {
 
     private var settingsBody: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sliderRow(title: "Sensitivity", value: $state.threshold, range: 5...30, suffix: "° drop")
-            sliderRow(title: "Hold before alert", value: $state.holdSeconds, range: 1...10, suffix: "s")
-            sliderRow(title: "Alert cooldown", value: $state.cooldown, range: 5...120, suffix: "s")
+            sliderRow(title: "Head-drop threshold", value: $state.threshold, range: 8...25, suffix: "°")
+            sliderRow(title: "Hold before cue", value: $state.holdSeconds, range: 3...20, suffix: "s")
 
             HStack {
-                Text("Alert sound")
+                Toggle("Screen-edge glow", isOn: $state.visualCueEnabled)
+                Button("Preview") {
+                    state.previewVisualCue()
+                }
+                .buttonStyle(.link)
+                .disabled(!state.visualCueEnabled)
+            }
+            if state.visualCueEnabled {
+                percentageSliderRow(title: "Glow strength", value: $state.visualCueStrength, range: 0.25...1)
+            }
+
+            Divider()
+
+            Toggle("Optional sound escalation", isOn: $state.soundEnabled)
+
+            HStack {
+                Text("Sound")
                 Spacer()
                 Picker("", selection: $state.soundName) {
                     ForEach(AlertManager.availableSounds, id: \.self) { name in
@@ -276,7 +313,10 @@ struct MenuContentView: View {
             }
             .disabled(!state.soundEnabled)
 
-            Toggle("Sound cue", isOn: $state.soundEnabled)
+            if state.soundEnabled || state.voiceEnabled || state.notificationsEnabled {
+                sliderRow(title: "Escalate after", value: $state.escalationSeconds, range: 15...120, suffix: "s")
+                sliderRow(title: "Repeat cooldown", value: $state.cooldown, range: 30...600, suffix: "s")
+            }
             Toggle("Spoken cue", isOn: $state.voiceEnabled)
             Toggle("Notifications", isOn: $state.notificationsEnabled)
             Toggle("Reverse detection", isOn: $state.invert)
@@ -315,11 +355,27 @@ struct MenuContentView: View {
         }
     }
 
+    private func percentageSliderRow(
+        title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(Int(value.wrappedValue * 100))%")
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: value, in: range)
+        }
+    }
+
     // MARK: Footer
 
     private var footer: some View {
         HStack {
-            Button("Contribute") {
+            Button("Source") {
                 openURL(Self.repoURL)
             }
             .buttonStyle(.link)

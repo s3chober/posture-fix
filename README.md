@@ -2,9 +2,9 @@
 
 <img src="docs/icon.png" width="110" alt="PostureFix" />
 
-# PostureFix
+# Posture Focus prototype
 
-**Fix your posture while you work — using the motion sensors in your AirPods.**
+**A quiet AirPods-powered head-position companion for focus sessions.**
 
 [![macOS](https://img.shields.io/badge/macOS-14%2B-black?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange?logo=swift&logoColor=white)](https://swift.org)
@@ -12,38 +12,42 @@
 
 </div>
 
-PostureFix sits in your menu bar, reads your AirPods' head-motion sensors, and
-nudges you the moment your neck starts to slouch toward the screen.
+Posture Focus sits in the menu bar and reads AirPods head-motion sensors. After
+a sustained downward tilt it fades in a click-through glow around the screen
+edges. The centre of the screen remains clear, and audio is disabled by default
+so Brain.fm, music, and calls are left alone.
 
-## Install
+## Build and run
 
-Homebrew:
-
-```bash
-brew install chandansgowda/tap/posture-fix
-posture-fix
-```
-
-From source (requires macOS 14+ and Xcode):
+Requires macOS 14+ and Xcode Command Line Tools:
 
 ```bash
-git clone https://github.com/chandansgowda/posture-fix.git
-cd posture-fix && make run
+./build.sh
+ditto -x -k "dist/Posture Focus.zip" /Applications
+open -a "Posture Focus"
 ```
+
+The archive is assembled and signed in a temporary non-synced directory before
+being placed in `dist`. This avoids Finder/iCloud metadata invalidating the
+local signature when the source project lives on the Desktop.
 
 ## First run
 
-1. Connect your AirPods (Pro, 3rd gen, Max, or Beats Fit Pro).
-2. Click the menu-bar icon → **Start monitoring**, then allow the Motion and
-   Notification prompts.
-3. Sit up straight, then click **Calibrate**.
-4. Slouch and you'll get a nudge.
+1. Connect AirPods 3 (or another compatible model) and start Brain.fm or your
+   preferred focus audio normally.
+2. Open the menu-bar icon and choose an untimed, 25, 50, or 90-minute session.
+3. Click **Start**, allow Motion & Fitness access, and wait for live pitch data.
+4. Sit in a comfortable neutral position and click **Calibrate**.
+5. A sustained head drop produces a warm edge glow. Lift your head and it
+   disappears automatically.
 
 ## Features
 
 - Reads head pitch via Apple's Core Motion — no extra hardware.
 - One-tap calibration of your upright baseline.
-- Nudges via in-ear sound, an optional spoken cue, and a macOS notification.
+- Public-AppKit screen-edge cue that does not capture clicks or alter audio.
+- Silent by default; sound, voice, and notifications are optional escalations.
+- Untimed monitoring for external Pomodoro apps plus 25/50/90-minute sessions.
 - Live stats and a 7-day history chart.
 - Tunable sensitivity, hold time, cooldown, and alert sound.
 - Start at login. Fully local — nothing leaves your Mac.
@@ -52,11 +56,11 @@ cd posture-fix && make run
 
 | Setting | Description |
 | --- | --- |
-| Sensitivity | How far your head must drop before it counts as slouching |
-| Hold before alert | How long you must slouch before being nudged |
-| Alert cooldown | Minimum gap between nudges |
-| Alert sound | Pick the system sound (with preview) |
-| Sound / Spoken / Notification | Toggle each cue on or off |
+| Head-drop threshold | Difference from the calibrated pitch before a cue can begin |
+| Hold before cue | How long the tilt must be sustained; default 8 seconds |
+| Screen-edge glow | Quiet primary feedback; enabled by default |
+| Escalate after | Total sustained tilt required before optional audio/notification |
+| Repeat cooldown | Minimum gap between interruptive cues; default 3 minutes |
 | Reverse detection | Flip if alerts fire when you sit up instead of slouch |
 | Start at login | Launch PostureFix automatically |
 
@@ -65,8 +69,17 @@ cd posture-fix && make run
 Modern AirPods expose a 9-axis IMU through `CMHeadphoneMotionManager` — the data
 behind Spatial Audio head tracking. PostureFix streams your head pitch, captures
 an upright baseline when you calibrate, filters the signal, and flags a slouch
-when your head stays dropped past your threshold for a few seconds. There's no
-API to buzz AirPods, so the nudge is an in-ear sound/voice cue.
+when your head stays dropped past your threshold. AirPods measure head
+orientation rather than spine or shoulder position, so this is intentionally a
+head-tilt reminder—not a medical posture assessment.
+
+## Tests
+
+Run the deterministic filter and timing checks with:
+
+```bash
+bash test.sh
+```
 
 ## Compatibility
 
@@ -79,4 +92,6 @@ PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE) © chandansgowda
+[MIT](LICENSE). This prototype is derived from
+[chandansgowda/posture-fix](https://github.com/chandansgowda/posture-fix); the
+original copyright and license notice are preserved.

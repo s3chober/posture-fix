@@ -20,6 +20,7 @@ final class AppState: ObservableObject {
     let alerts = AlertManager()
     let audio = AudioDeviceMonitor()
     let history = HistoryStore()
+    let overlay = PostureOverlayController()
 
     private let defaults = UserDefaults.standard
     private var cancellables = Set<AnyCancellable>()
@@ -31,6 +32,7 @@ final class AppState: ObservableObject {
     @Published private(set) var livePitch: Double = 0
     @Published private(set) var deviation: Double = 0
     @Published private(set) var isCalibrated = false
+    @Published private(set) var sessionRemainingSeconds: TimeInterval?
 
     @Published private(set) var launchAtLogin = false
     @Published private(set) var loginItemError: String?
@@ -47,6 +49,7 @@ final class AppState: ObservableObject {
     private var previousState: PostureState = .unknown
     private var sampleIndex = 0
     private var sessionStartTime: Date?
+    private var focusEndDate: Date?
     private let chartWindowSeconds: Double = 60
 
     // MARK: Settings (persisted)
@@ -70,32 +73,66 @@ final class AppState: ObservableObject {
         didSet { alerts.voiceEnabled = voiceEnabled; defaults.set(voiceEnabled, forKey: "voiceEnabled") }
     }
     @Published var notificationsEnabled: Bool {
-        didSet { alerts.notificationEnabled = notificationsEnabled; defaults.set(notificationsEnabled, forKey: "notificationsEnabled") }
+        didSet {
+            alerts.notificationEnabled = notificationsEnabled
+            defaults.set(notificationsEnabled, forKey: "notificationsEnabled")
+            if notificationsEnabled { alerts.requestNotificationAuthorization() }
+        }
     }
     @Published var invert: Bool {
         didSet { analyzer.invert = invert; defaults.set(invert, forKey: "invert") }
     }
+    @Published var visualCueEnabled: Bool {
+        didSet {
+            overlay.enabled = visualCueEnabled
+            defaults.set(visualCueEnabled, forKey: "visualCueEnabled")
+        }
+    }
+    @Published var visualCueStrength: Double {
+        didSet {
+            overlay.strength = visualCueStrength
+            defaults.set(visualCueStrength, forKey: "visualCueStrength")
+        }
+    }
+    @Published var escalationSeconds: Double {
+        didSet {
+            alerts.escalationSeconds = escalationSeconds
+            defaults.set(escalationSeconds, forKey: "escalationSeconds")
+        }
+    }
+    /// 0 means an untimed session, useful alongside an external Pomodoro app.
+    @Published var focusDurationMinutes: Int {
+        didSet { defaults.set(focusDurationMinutes, forKey: "focusDurationMinutes") }
+    }
 
     init() {
         defaults.register(defaults: [
-            "threshold": 15.0,
-            "holdSeconds": 3.0,
-            "cooldown": 20.0,
-            "soundEnabled": true,
-            "soundName": "Funk",
+            "threshold": 12.0,
+            "holdSeconds": 8.0,
+            "cooldown": 180.0,
+            "soundEnabled": false,
+            "soundName": "Tink",
             "voiceEnabled": false,
-            "notificationsEnabled": true,
-            "invert": false
+            "notificationsEnabled": false,
+            "invert": false,
+            "visualCueEnabled": true,
+            "visualCueStrength": 0.55,
+            "escalationSeconds": 30.0,
+            "focusDurationMinutes": 0
         ])
 
         threshold = defaults.double(forKey: "threshold")
         holdSeconds = defaults.double(forKey: "holdSeconds")
         cooldown = defaults.double(forKey: "cooldown")
         soundEnabled = defaults.bool(forKey: "soundEnabled")
-        soundName = defaults.string(forKey: "soundName") ?? "Funk"
+        soundName = defaults.string(forKey: "soundName") ?? "Tink"
         voiceEnabled = defaults.bool(forKey: "voiceEnabled")
         notificationsEnabled = defaults.bool(forKey: "notificationsEnabled")
         invert = defaults.bool(forKey: "invert")
+        visualCueEnabled = defaults.bool(forKey: "visualCueEnabled")
+        visualCueStrength = defaults.double(forKey: "visualCueStrength")
+        escalationSeconds = defaults.double(forKey: "escalationSeconds")
+        focusDurationMinutes = defaults.integer(forKey: "focusDurationMinutes")
 
         analyzer.thresholdDegrees = threshold
         analyzer.holdSeconds = holdSeconds
@@ -105,7 +142,10 @@ final class AppState: ObservableObject {
         alerts.soundName = soundName
         alerts.voiceEnabled = voiceEnabled
         alerts.notificationEnabled = notificationsEnabled
-        alerts.requestNotificationAuthorization()
+        alerts.escalationSeconds = escalationSeconds
+        overlay.enabled = visualCueEnabled
+        overlay.strength = visualCueStrength
+        if notificationsEnabled { alerts.requestNotificationAuthorization() }
 
         motion.onMotion = { [weak self] pitch in
             self?.handle(pitch: pitch)
@@ -114,6 +154,20 @@ final class AppState: ObservableObject {
         // Re-publish nested object changes (connection / audio route) to the UI.
         motion.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        motion.$hasData
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] hasData in
+                guard let self, !hasData else { return }
+                self.overlay.hide()
+                if self.isMonitoring {
+                    self.analyzer.reset()
+                    self.isCalibrated = false
+                    self.postureState = .unknown
+                    self.deviation = 0
+                }
+            }
             .store(in: &cancellables)
         audio.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -124,7 +178,15 @@ final class AppState: ObservableObject {
 
         // Persist the in-progress session if the app quits mid-monitoring.
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
-            .sink { [weak self] _ in self?.flushSessionToHistory() }
+            .sink { [weak self] _ in
+                self?.overlay.hide(animated: false)
+                self?.flushSessionToHistory()
+            }
+            .store(in: &cancellables)
+
+        Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] now in self?.updateFocusTimer(now: now) }
             .store(in: &cancellables)
 
         refreshLoginItemStatus()
@@ -134,6 +196,14 @@ final class AppState: ObservableObject {
 
     func startMonitoring() {
         resetSession()
+        if focusDurationMinutes > 0 {
+            let duration = TimeInterval(focusDurationMinutes * 60)
+            focusEndDate = Date().addingTimeInterval(duration)
+            sessionRemainingSeconds = duration
+        } else {
+            focusEndDate = nil
+            sessionRemainingSeconds = nil
+        }
         motion.start()
         isMonitoring = true
     }
@@ -144,6 +214,9 @@ final class AppState: ObservableObject {
         isMonitoring = false
         postureState = .unknown
         deviation = 0
+        focusEndDate = nil
+        sessionRemainingSeconds = nil
+        overlay.hide()
     }
 
     func calibrate() {
@@ -162,10 +235,22 @@ final class AppState: ObservableObject {
         postureState = .unknown
         deviation = 0
         resetSession()
+        overlay.hide()
     }
 
     func previewSound() {
         alerts.previewSound()
+    }
+
+    func previewVisualCue() {
+        guard visualCueEnabled else { return }
+        overlay.show(intensity: 0.8)
+        // Hold long enough for the slow fade-in to complete before fading out.
+        let holdFor = overlay.fadeInDuration + 1.5
+        DispatchQueue.main.asyncAfter(deadline: .now() + holdFor) { [weak self] in
+            guard let self, self.postureState != .bad else { return }
+            self.overlay.hide()
+        }
     }
 
     // MARK: Launch at login
@@ -257,7 +342,27 @@ final class AppState: ObservableObject {
         previousState = state
 
         if state == .bad {
-            alerts.triggerSlouchAlert(deviation: deviation, now: now)
+            // The glow scales with how far the head has moved past the chosen
+            // threshold. It never captures clicks or covers the screen centre.
+            let overshoot = max(0, deviation - threshold)
+            overlay.show(intensity: min(1, 0.45 + overshoot / 18))
+            alerts.triggerSlouchAlert(
+                deviation: deviation,
+                sustainedFor: analyzer.slouchDuration,
+                now: now
+            )
+        } else {
+            overlay.hide()
+        }
+    }
+
+    private func updateFocusTimer(now: Date) {
+        guard isMonitoring, let focusEndDate else { return }
+        let remaining = focusEndDate.timeIntervalSince(now)
+        if remaining <= 0 {
+            stopMonitoring()
+        } else {
+            sessionRemainingSeconds = remaining
         }
     }
 
@@ -310,6 +415,18 @@ final class AppState: ObservableObject {
     var monitoredTimeString: String {
         let total = Int(goodSeconds + badSeconds)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    var focusTimeString: String? {
+        guard let remaining = sessionRemainingSeconds else { return nil }
+        let total = max(0, Int(remaining.rounded(.up)))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    var startButtonTitle: String {
+        focusDurationMinutes > 0
+            ? "Start \(focusDurationMinutes)-minute focus"
+            : "Start monitoring"
     }
 
     var menuBarSymbol: String {

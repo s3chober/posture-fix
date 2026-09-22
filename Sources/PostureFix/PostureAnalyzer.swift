@@ -1,6 +1,6 @@
 import Foundation
 
-enum PostureState {
+enum PostureState: Equatable {
     case unknown    // not calibrated yet
     case good
     case bad        // sustained slouch
@@ -22,11 +22,12 @@ final class PostureAnalyzer {
     /// When true, the detection direction is flipped.
     var invert = false
 
-    private let alpha = 0.2           // low-pass smoothing factor
+    private let alpha: Double         // low-pass smoothing factor
     private var smoothed: Double?
     private var baseline: Double?
     private var badSince: Date?
     private var goodSince: Date?
+    private var thresholdExceededSince: Date?
 
     private(set) var state: PostureState = .unknown
     /// Signed "drop" below baseline in degrees (positive = slouching further).
@@ -35,6 +36,11 @@ final class PostureAnalyzer {
     var baselinePitch: Double? { baseline }
     var smoothedPitch: Double? { smoothed }
     var isCalibrated: Bool { baseline != nil }
+    private(set) var slouchDuration: TimeInterval = 0
+
+    init(smoothingFactor: Double = 0.2) {
+        alpha = min(1, max(0.01, smoothingFactor))
+    }
 
     /// Capture the current (smoothed) pitch as the upright reference.
     @discardableResult
@@ -43,6 +49,8 @@ final class PostureAnalyzer {
         baseline = smoothed
         badSince = nil
         goodSince = nil
+        thresholdExceededSince = nil
+        slouchDuration = 0
         state = .good
         drop = 0
         return true
@@ -53,8 +61,10 @@ final class PostureAnalyzer {
         baseline = nil
         badSince = nil
         goodSince = nil
+        thresholdExceededSince = nil
         state = .unknown
         drop = 0
+        slouchDuration = 0
     }
 
     @discardableResult
@@ -78,12 +88,16 @@ final class PostureAnalyzer {
 
         if drop >= thresholdDegrees {
             goodSince = nil
-            if badSince == nil { badSince = now }
+            if thresholdExceededSince == nil { thresholdExceededSince = now }
+            slouchDuration = now.timeIntervalSince(thresholdExceededSince ?? now)
+            if badSince == nil { badSince = thresholdExceededSince }
             if let badSince, now.timeIntervalSince(badSince) >= holdSeconds {
                 state = .bad
             }
         } else {
             badSince = nil
+            thresholdExceededSince = nil
+            slouchDuration = 0
             if goodSince == nil { goodSince = now }
             if let goodSince, now.timeIntervalSince(goodSince) >= recoverSeconds {
                 state = .good

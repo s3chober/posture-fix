@@ -13,20 +13,23 @@ final class AlertManager {
         "Tink", "Sosumi", "Pop", "Purr", "Bottle", "Blow"
     ]
 
-    var soundEnabled = true
+    var soundEnabled = false
     var voiceEnabled = false
-    var notificationEnabled = true
-    var cooldown: TimeInterval = 20
-    var soundName = "Funk" {
+    var notificationEnabled = false
+    var cooldown: TimeInterval = 180
+    /// Total time the user's head must remain below the threshold before an
+    /// interruptive cue is allowed. The visual glow appears first.
+    var escalationSeconds: TimeInterval = 30
+    var soundName = "Tink" {
         didSet { reloadSound() }
     }
 
     private var lastAlert: Date?
     private let synth = AVSpeechSynthesizer()
-    private var sound = NSSound(named: "Funk")
+    private var sound = NSSound(named: "Tink")
 
     private func reloadSound() {
-        sound = NSSound(named: NSSound.Name(soundName)) ?? NSSound(named: "Funk")
+        sound = NSSound(named: NSSound.Name(soundName)) ?? NSSound(named: "Tink")
     }
 
     /// Play the currently selected alert sound once (for previewing in settings).
@@ -46,7 +49,13 @@ final class AlertManager {
         lastAlert = nil
     }
 
-    func triggerSlouchAlert(deviation: Double, now: Date = Date()) {
+    func triggerSlouchAlert(
+        deviation: Double,
+        sustainedFor: TimeInterval,
+        now: Date = Date()
+    ) {
+        guard soundEnabled || voiceEnabled || notificationEnabled else { return }
+        guard sustainedFor >= escalationSeconds else { return }
         if let lastAlert, now.timeIntervalSince(lastAlert) < cooldown { return }
         lastAlert = now
 
@@ -55,7 +64,7 @@ final class AlertManager {
             sound?.play()
         }
         if voiceEnabled {
-            let utterance = AVSpeechUtterance(string: "Sit up straight")
+            let utterance = AVSpeechUtterance(string: "Gently lift your head")
             utterance.rate = 0.5
             synth.speak(utterance)
         }
@@ -66,9 +75,9 @@ final class AlertManager {
 
     private func postNotification(deviation: Double) {
         let content = UNMutableNotificationContent()
-        content.title = "Fix your posture"
+        content.title = "Posture check"
         content.body = String(
-            format: "Your head dropped %.0f° below your baseline — straighten your neck.",
+            format: "Your head has been tilted %.0f° below your baseline. Reset if that feels comfortable.",
             abs(deviation)
         )
         content.sound = nil   // we play our own cue

@@ -30,6 +30,7 @@ final class HeadphoneMotionService: NSObject, ObservableObject {
 
     private let manager = CMHeadphoneMotionManager()
     private var isRunning = false
+    private var wantsUpdates = false
 
     override init() {
         super.init()
@@ -48,6 +49,7 @@ final class HeadphoneMotionService: NSObject, ObservableObject {
     }
 
     func start() {
+        wantsUpdates = true
         guard !isRunning else { return }
         isAvailable = manager.isDeviceMotionAvailable
         guard manager.isDeviceMotionAvailable else {
@@ -74,6 +76,7 @@ final class HeadphoneMotionService: NSObject, ObservableObject {
     }
 
     func stop() {
+        wantsUpdates = false
         guard isRunning else { return }
         manager.stopDeviceMotionUpdates()
         isRunning = false
@@ -84,14 +87,26 @@ final class HeadphoneMotionService: NSObject, ObservableObject {
 extension HeadphoneMotionService: CMHeadphoneMotionManagerDelegate {
     func headphoneMotionManagerDidConnect(_ manager: CMHeadphoneMotionManager) {
         DispatchQueue.main.async { [weak self] in
-            self?.isConnected = true
+            guard let self else { return }
+            self.isConnected = true
+            self.isAvailable = manager.isDeviceMotionAvailable
+            if self.wantsUpdates {
+                self.start()
+            }
         }
     }
 
     func headphoneMotionManagerDidDisconnect(_ manager: CMHeadphoneMotionManager) {
         DispatchQueue.main.async { [weak self] in
-            self?.isConnected = false
-            self?.hasData = false
+            guard let self else { return }
+            manager.stopDeviceMotionUpdates()
+            self.isRunning = false
+            self.isConnected = false
+            self.isAvailable = manager.isDeviceMotionAvailable
+            self.hasData = false
+            if self.wantsUpdates {
+                self.lastError = "AirPods disconnected. Monitoring will resume after they reconnect."
+            }
         }
     }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds PostureFix into a runnable, signed .app bundle.
+# Builds PostureFix into a signed .app archive.
 #
 # Usage:
 #   ./build.sh [debug|release]
@@ -16,8 +16,20 @@
 set -euo pipefail
 
 CONFIG="${1:-release}"
-APP_NAME="PostureFix"
+PRODUCT_NAME="PostureFix"
+APP_NAME="Posture Focus"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+OUTPUT_DIR="$ROOT/dist"
+OUTPUT_ARCHIVE="$OUTPUT_DIR/$APP_NAME.zip"
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/posture-focus-build.XXXXXX")"
+
+cleanup() {
+    if [[ -n "$STAGING_DIR" && -d "$STAGING_DIR" ]]; then
+        rm -rf "$STAGING_DIR"
+    fi
+}
+trap cleanup EXIT
+
 cd "$ROOT"
 
 # --disable-sandbox lets the build run inside Homebrew's build sandbox, where
@@ -30,19 +42,23 @@ BIN_DIR="$(swift build "${SWIFT_FLAGS[@]}" --show-bin-path)"
 echo "› Compiling ($CONFIG)…"
 swift build "${SWIFT_FLAGS[@]}"
 
-APP_BUNDLE="$BIN_DIR/$APP_NAME.app"
+APP_BUNDLE="$STAGING_DIR/$APP_NAME.app"
 CONTENTS="$APP_BUNDLE/Contents"
 echo "› Assembling $APP_BUNDLE"
-rm -rf "$APP_BUNDLE"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
-cp "$BIN_DIR/$APP_NAME" "$CONTENTS/MacOS/$APP_NAME"
+cp "$BIN_DIR/$PRODUCT_NAME" "$CONTENTS/MacOS/$PRODUCT_NAME"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 if [[ -f "$ROOT/Resources/AppIcon.icns" ]]; then
     cp "$ROOT/Resources/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 else
     echo "  (no Resources/AppIcon.icns — generate it with: swift scripts/make_icon.swift)"
 fi
+
+# Finder metadata can be inherited from files copied out of Desktop folders.
+# Strip it before signing or macOS's strict signature verification rejects the
+# otherwise valid local app bundle.
+xattr -cr "$APP_BUNDLE"
 
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
     echo "› Code signing with: $SIGN_IDENTITY (+ headphone-motion entitlement)"
@@ -55,5 +71,12 @@ else
     codesign --force --sign - "$APP_BUNDLE"
 fi
 
-echo "✓ Built $APP_BUNDLE"
-echo "  Run it with:  open \"$APP_BUNDLE\""
+echo "› Verifying signature"
+codesign --verify --deep --strict "$APP_BUNDLE"
+
+mkdir -p "$OUTPUT_DIR"
+rm -f "$OUTPUT_ARCHIVE"
+ditto -c -k --keepParent "$APP_BUNDLE" "$OUTPUT_ARCHIVE"
+
+echo "✓ Built $OUTPUT_ARCHIVE"
+echo "  Install it with: ditto -x -k \"$OUTPUT_ARCHIVE\" /Applications"
